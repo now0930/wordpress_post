@@ -170,3 +170,27 @@ python3 -m unittest discover -s tests -v
 - **아직 미검증**: 사용자 WordPress Application Password 실제 인증, 미디어 업로드, 임시글 등록, CSS/그림 최종 렌더링.
 
 주의: WordPress가 `<style>`을 제한하는 경우 페이지의 CSS가 제거될 수 있습니다. **본문 구조는 유지하고 Chapter 19 CSS는 WordPress의 추가 CSS 영역에 한 번 등록**하는 방식이 더 안정적입니다.
+
+
+## 날짜_제목 ZIP 업로드 방식 (기본 작업 흐름)
+
+학습자료를 만들면 **게시글마다 ZIP 하나**로 전달하고 사용자가 서버에서 압축을 해제해 업로드합니다.
+
+- 폴더명: `posts/YYYYMMDD_제목/` (예: `posts/20261031_Chapter32-1_공정안전과_방폭/`)
+- `post.json`: 게시글 제목·고유 slug·요약
+- `post.html`: 기존 Chapter 19 CSS 본문. 그림 링크는 `images/파일명.jpg` 상대경로로 사전 설정
+- `images/`: 본문에 사용되는 그림 전부. Base64 내장 이미지는 ZIP 제작 시 분리
+- 별도로 제공할 수 있는 `chapter19.css`는 CSS 문제 확인용으로, `wp_sync.py`는 HTML 안의 스타일을 게시합니다.
+
+ZIP의 최상위에는 `posts/` 폴더가 포함됩니다. **프로젝트 루트**에서 압축을 풉니다.
+
+```bash
+cd ~/wordpress_post
+unzip /다운로드경로/파일명.zip -d .
+python3 wp_sync.py '20261031_Chapter32-1_공정안전과_방폭'
+python3 wp_sync.py '20261031_Chapter32-1_공정안전과_방폭' --apply
+```
+
+`--apply` 이전에는 WordPress에 저장하지 않습니다. 실행 시 상대경로 그림은 자동으로 WordPress 미디어 라이브러리에 업로드되고 링크가 교체됩니다. 최초 업로드는 **임시글**이며 수동으로 검토 후 공개합니다.
+
+> 공개 GitHub 저장소에서는 교재 이미지·개인 필기 등 공개 권한이 확인되지 않은 자료를 무심코 commit하지 마세요. ZIP 파일은 별도로 내려받아 서버에 배치할 수 있습니다.
