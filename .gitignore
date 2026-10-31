@@ -1,0 +1,25 @@
+# Never commit WordPress authentication data.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local WordPress synchronization state / cache.
+**/.wp-state.json
+**/.wp-media-cache.json
+*.log
+*.sqlite
+*.sqlite3
+
+# Python environment.
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Local editor / OS metadata.
+.DS_Store
+.idea/
+.vscode/
