@@ -36,7 +36,7 @@ IMAGE_EXT = {
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_IMAGES = 100
 IMAGE_TAG = re.compile(r"<img\b[^>]*>", re.IGNORECASE | re.DOTALL)
-SRC_ATTR = re.compile(r"(?P<prefix>\bsrc\s*=\s*)(?P<q>['\"])(?P<url>.*?)(?P=q)", re.IGNORECASE | re.DOTALL)
+SRC_ATTR = re.compile(r"(?P<prefix>\s+src\s*=\s*)(?P<q>['\"])(?P<url>.*?)(?P=q)", re.IGNORECASE | re.DOTALL)
 BODY = re.compile(r"<body\b[^>]*>(.*?)</body\s*>", re.IGNORECASE | re.DOTALL)
 HEAD = re.compile(r"<head\b[^>]*>(.*?)</head\s*>", re.IGNORECASE | re.DOTALL)
 STYLES = re.compile(r"<style\b[^>]*>.*?</style\s*>", re.IGNORECASE | re.DOTALL)
