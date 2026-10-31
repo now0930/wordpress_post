@@ -153,6 +153,17 @@ class FolderTests(unittest.TestCase):
             fake.requests[0][2]["content"]
         )
 
+    def test_data_src_attribute_is_not_mistaken_for_src(self):
+        self.write_html(
+            '<img data-src="placeholder.png" '
+            'src="https://example.org/real.png">'
+        )
+        _, _, assets, _ = wp_sync.prepare(self.folder)
+        self.assertEqual(
+            list(assets),
+            ["https://example.org/real.png"],
+        )
+
     def test_http_remote_image_rejected(self):
         self.write_html('<img src="http://example.com/pic.png">')
         with self.assertRaises(wp_sync.SyncError):
