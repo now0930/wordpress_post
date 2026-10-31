@@ -239,6 +239,7 @@ class WordPress:
 def synchronize(
     folder: Path, wp: WordPress | None, apply: bool,
     adopt_draft: bool = False, force: bool = False,
+    recreate_trashed: bool = False,
 ) -> str:
     if not folder.is_dir():
         raise SyncError("게시글 폴더가 없습니다: " + folder.name)
@@ -256,15 +257,41 @@ def synchronize(
     if wp is None:
         raise SyncError("실제 적용에는 WordPress 연결이 필요합니다.")
 
-    # Never publish or overwrite a public post, including explicitly adopted posts.
+    # Never publish, restore, or overwrite a non-draft post automatically.
+    # WordPress may change the slug to '<original>__trashed' upon trashing.
     post_id = state.get("post_id")
     if post_id:
         remote = wp.by_id(post_id)
-        if remote.get("slug") != meta["slug"]:
-            raise SyncError("상태 파일과 원격 게시글 slug가 다릅니다. 중단합니다.")
-        if remote.get("status") != "draft":
-            raise SyncError("임시글이 아닌 원격 게시글은 수정하지 않습니다.")
+        status = remote.get("status")
+        if status == "trash":
+            if not recreate_trashed:
+                raise SyncError(
+                    f"기존 게시글 ID={post_id}가 휴지통(trash)에 있습니다. "
+                    "WordPress 휴지통에서 복원하거나, 새 임시글로 다시 만들려면 "
+                    "--recreate-trashed 옵션을 명시하세요. "
+                    "기존 휴지통 글과 미디어는 삭제하지 않았습니다."
+                )
+            conflicts = [
+                post for post in wp.by_slug(meta["slug"])
+                if post.get("id") != post_id and post.get("status") != "trash"
+            ]
+            if conflicts:
+                raise SyncError(
+                    "같은 slug의 다른 게시글이 존재합니다. "
+                    "기존 글을 확인한 후 다시 시도하세요."
+                )
+            print(f"[RECREATE] 휴지통 글 ID={post_id}는 그대로 두고 새 임시글을 생성합니다.")
+            post_id = None
+        else:
+            if recreate_trashed:
+                raise SyncError("--recreate-trashed는 기존 글 상태가 trash일 때만 사용할 수 있습니다.")
+            if status != "draft":
+                raise SyncError("임시글이 아닌 원격 게시글은 수정하지 않습니다.")
+            if remote.get("slug") != meta["slug"]:
+                raise SyncError("상태 파일과 원격 게시글 slug가 다릅니다. 중단합니다.")
     else:
+        if recreate_trashed:
+            raise SyncError("--recreate-trashed는 추적 중인 휴지통 글이 있을 때만 사용할 수 있습니다.")
         matches = wp.by_slug(meta["slug"])
         if matches:
             if len(matches) != 1 or not adopt_draft:
@@ -343,9 +370,17 @@ def main() -> int:
     selector.add_argument("--all", action="store_true", help="모든 폴더 동기화")
     parser.add_argument("--apply", action="store_true", help="실제 이미지/임시글 업로드")
     parser.add_argument("--adopt-draft", action="store_true", help="기존 동일 slug의 임시글 연결 허용")
+    parser.add_argument(
+        "--recreate-trashed", action="store_true",
+        help="기존 추적 게시글이 휴지통에 있을 때 새 임시글 생성 (휴지통 글은 유지)",
+    )
     parser.add_argument("--force", action="store_true", help="변경되지 않은 임시글도 다시 쓰기")
     parser.add_argument("--env", type=Path, default=ROOT / ".env")
     args = parser.parse_args()
+    if args.all and args.recreate_trashed:
+        parser.error("--recreate-trashed는 --all과 함께 사용할 수 없습니다. 한 게시글만 지정하세요.")
+    if args.adopt_draft and args.recreate_trashed:
+        parser.error("--adopt-draft와 --recreate-trashed를 동시에 사용할 수 없습니다.")
 
     if args.all:
         folders = sorted(
@@ -369,7 +404,8 @@ def main() -> int:
     for folder in folders:
         try:
             synchronize(folder, wp, apply=args.apply,
-                        adopt_draft=args.adopt_draft, force=args.force)
+                        adopt_draft=args.adopt_draft, force=args.force,
+                        recreate_trashed=args.recreate_trashed)
         except (SyncError, ProbeError, ValueError, OSError, json.JSONDecodeError) as exc:
             failures += 1
             print(f"[FAIL] {folder.name}: {exc}", file=sys.stderr)
