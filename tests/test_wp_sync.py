@@ -153,14 +153,13 @@ class FolderTests(unittest.TestCase):
         self.assertEqual(wp_sync.load_state(self.folder), before_state)
 
     def test_recreate_trashed_creates_new_draft_and_reuses_images(self):
-        data = b"\\x89PNG\\r\\n\\x1a\\n" + b"test-image"
+        data = bytes.fromhex("89504e470d0a1a0a") + b"test-image"
         (self.folder / "images").mkdir()
         (self.folder / "images" / "diagram.png").write_bytes(data)
         self.write_html('<img src="images/diagram.png">')
         fake = FakeWordPress()
         wp_sync.synchronize(self.folder, fake, True)
         old_id = next(iter(fake.posts))
-        old_post = dict(fake.posts[old_id])
         self.assertEqual(len(fake.uploads), 1)
 
         fake.posts[old_id]["status"] = "trash"
