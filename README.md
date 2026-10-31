@@ -224,3 +224,42 @@ python3 wp_sync.py '20261031_Chapter32-1_공정안전과_방폭' --apply --recre
 - `.wp-state.json`을 삭제하거나 `post.json`의 slug를 임의 변경하는 방식은 권장하지 않습니다.
 
 WordPress에 실제로 새 임시글이 생성되는 명령이므로 `--recreate-trashed`를 사용하기 전에 원하는 작업이 복원인지 새로 등록인지 확인하세요.
+
+
+## 요약문과 키워드(WordPress 태그) 자동 등록
+
+게시글 폴더의 `post.json`에 `excerpt`(발췌 요약)와 `keywords`(태그 이름 배열)를 지정합니다.
+
+```json
+{
+  "title": "Chapter 32.1 공정안전과 방폭 — 위험장소 분류와 보호대책",
+  "slug": "chapter32-1-process-safety-20261031",
+  "excerpt": "위험장소와 폭발한계의 물리적 원리 및 네 가지 방폭 보호방식을 설명한다.",
+  "keywords": [
+    "위험장소 분류",
+    "폭발한계(LEL·UEL)",
+    "최소점화에너지(MIE)",
+    "MESG·MICR",
+    "본질안전방폭"
+  ]
+}
+```
+
+- `excerpt`: WordPress 글의 발췌 요약으로 저장. 테마에서 표시 여부가 달라질 수 있습니다.
+- `keywords`: 기존 WordPress 태그를 검색하여 재사용하고, 없으면 태그를 만든 뒤 태그 ID를 게시글의 `tags` 필드로 전달합니다.
+- `keywords` 필드를 **생략**하면 기존 태그를 그대로 둡니다. `"keywords": []`를 지정하면 임시글의 태그를 모두 비웁니다.
+- 태그 생성에는 해당 WordPress 계정의 분류항목 생성 권한이 필요할 수 있습니다. 권한 오류가 나면 게시글 등록을 중단합니다.
+- 이 기능은 **WordPress 기본 발췌문과 태그**입니다. Yoast/Rank Math 등 SEO 플러그인용 메타 설명/메타 키워드 필드를 수정하지는 않습니다.
+- ZIP의 `post.json`만 업데이트해도 로컬 변경이 감지되며, 임시글의 요약문/태그를 갱신합니다. 그림이 변하지 않았다면 다시 업로드하지 않습니다.
+- 이미 발행된 글은 자동으로 덮어쓰지 않는 기존 안전정책을 유지합니다.
+
+실행 예시:
+
+```bash
+cd ~/wordpress_post
+git pull --ff-only
+python3 -m unittest discover -s tests -v
+unzip -o chapter32_1_wordpress_upload_v4.zip
+python3 wp_sync.py '20261031_Chapter32-1_공정안전과_방폭'
+python3 wp_sync.py '20261031_Chapter32-1_공정안전과_방폭' --apply
+```
