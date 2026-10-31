@@ -71,7 +71,28 @@ def metadata(folder: Path) -> dict:
         raise SyncError("slug는 소문자·숫자·하이픈만 사용하세요.")
     if not isinstance(excerpt, str):
         raise SyncError("excerpt는 문자열이어야 합니다.")
-    return {"title": title.strip(), "slug": slug, "excerpt": excerpt}
+    result = {"title": title.strip(), "slug": slug, "excerpt": excerpt}
+    # An omitted keywords field means: leave existing WordPress tags unchanged.
+    # An empty list means: explicitly clear tags on a draft.
+    if "keywords" in data:
+        keywords = data["keywords"]
+        if not isinstance(keywords, list) or len(keywords) > 20:
+            raise SyncError("keywords는 최대 20개의 문자열 배열이어야 합니다.")
+        seen = set()
+        normalized = []
+        for keyword in keywords:
+            if not isinstance(keyword, str) or not keyword.strip():
+                raise SyncError("keywords는 비어 있지 않은 문자열만 허용합니다.")
+            keyword = keyword.strip()
+            if len(keyword) > 80:
+                raise SyncError("키워드 하나는 최대 80자까지 허용합니다.")
+            key = keyword.casefold()
+            if key in seen:
+                raise SyncError("중복 키워드는 허용하지 않습니다: " + keyword)
+            normalized.append(keyword)
+            seen.add(key)
+        result["keywords"] = normalized
+    return result
 
 
 def image_info(url: str, folder: Path) -> dict | None:
@@ -221,6 +242,43 @@ class WordPress:
             raise SyncError("원격 게시글 조회 실패")
         return result
 
+    def keyword_tag_ids(self, keywords: list[str]) -> list[int]:
+        """Resolve existing WordPress tags, creating only absent terms.
+
+        Only invoked after --apply and before writing a draft.
+        Tag creation requires taxonomy management permissions on the site.
+        """
+        ids: list[int] = []
+        for keyword in keywords:
+            route = "tags?" + urllib.parse.urlencode({
+                "search": keyword,
+                "per_page": "100",
+                "hide_empty": "false",
+            })
+            matches = self.request("GET", route)
+            if not isinstance(matches, list):
+                raise SyncError("WordPress 태그 조회 응답이 잘못되었습니다.")
+            exact = [
+                tag for tag in matches
+                if isinstance(tag, dict)
+                and isinstance(tag.get("name"), str)
+                and html.unescape(tag["name"]).strip().casefold() == keyword.casefold()
+            ]
+            if len(exact) > 1:
+                raise SyncError("중복 태그 후보가 있습니다: " + keyword)
+            if exact:
+                tag_id = exact[0].get("id")
+            else:
+                created = self.request("POST", "tags", payload={"name": keyword})
+                if not isinstance(created, dict):
+                    raise SyncError("WordPress 태그 생성 응답이 잘못되었습니다.")
+                tag_id = created.get("id")
+                print("[TAG] 새 태그 생성: " + keyword)
+            if type(tag_id) is not int or tag_id <= 0:
+                raise SyncError("WordPress 태그 ID가 올바르지 않습니다.")
+            ids.append(tag_id)
+        return ids
+
     def upload(self, name: str, asset: dict) -> str:
         response = self.request(
             "POST", "media",
@@ -339,6 +397,9 @@ def synchronize(
         "excerpt": meta["excerpt"],
         "content": final_content,
     }
+    if "keywords" in meta:
+        # WordPress posts require integer tag IDs, not tag names.
+        payload["tags"] = wp.keyword_tag_ids(meta["keywords"])
     if post_id:
         saved = wp.request("POST", f"posts/{post_id}", payload=payload)
         action = "UPDATE"
