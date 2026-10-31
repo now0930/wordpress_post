@@ -111,7 +111,7 @@ class ProbeTests(unittest.TestCase):
                 "edit_posts": False, "upload_files": True
             }},
         ])
-        with patch.object(wp_check, "get_json", side_effect=lambda **_: next(responses)):
+        with patch.object(wp_check, "get_json", side_effect=lambda *args, **kwargs: next(responses)):
             with self.assertRaises(wp_check.ProbeError):
                 wp_check.check(self.config, public_only=False, timeout=2)
 
