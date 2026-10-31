@@ -30,6 +30,10 @@ class FakeWordPress:
         self.uploads.append((name, asset))
         return "https://example.org/wp-content/uploads/" + name
 
+    def keyword_tag_ids(self, keywords):
+        # Exercise the real tag-lookup implementation with this fake REST API.
+        return wp_sync.WordPress.keyword_tag_ids(self, keywords)
+
     def request(self, method, route, payload=None):
         self.requests.append((method, route, payload))
         if method == "GET" and route.startswith("tags?"):
