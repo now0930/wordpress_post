@@ -7,6 +7,7 @@
 
 # Local WordPress synchronization state / cache.
 **/.wp-state.json
+**/.wp-state-*.tmp
 **/.wp-media-cache.json
 *.log
 *.sqlite
