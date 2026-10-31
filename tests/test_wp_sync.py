@@ -1,0 +1,193 @@
+"""Offline tests for WordPress draft sync: no network or real publishing."""
+from __future__ import annotations
+
+import base64
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import wp_sync
+
+
+class FakeWordPress:
+    def __init__(self, initial=None):
+        self.posts: dict[int, dict] = {}
+        if initial:
+            self.posts[initial["id"]] = initial
+        self.requests = []
+        self.uploads = []
+
+    def by_slug(self, slug):
+        return [dict(v) for v in self.posts.values() if v["slug"] == slug]
+
+    def by_id(self, post_id):
+        return dict(self.posts[post_id])
+
+    def upload(self, name, asset):
+        self.uploads.append((name, asset))
+        return "https://example.org/wp-content/uploads/" + name
+
+    def request(self, method, route, payload=None):
+        self.requests.append((method, route, payload))
+        assert method == "POST"
+        if route == "posts":
+            post_id = max(self.posts, default=100) + 1
+        else:
+            post_id = int(route.removeprefix("posts/"))
+        saved = {
+            "id": post_id,
+            "slug": payload["slug"],
+            "status": payload.get("status", "draft"),
+            "content": {"raw": payload["content"]},
+        }
+        self.posts[post_id] = saved
+        return saved
+
+
+class FolderTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name) / "chapter32-1"
+        self.folder.mkdir()
+        (self.folder / "post.json").write_text(
+            json.dumps({
+                "title": "Chapter 32.1",
+                "slug": "chapter32-1",
+                "excerpt": "위험장소 정리",
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def write_html(self, body):
+        (self.folder / "post.html").write_text(body, encoding="utf-8")
+
+    def test_dry_run_requires_no_client_and_writes_no_state(self):
+        self.write_html('<div class="chapter19-wide">Hello</div>')
+        result = wp_sync.synchronize(self.folder, None, apply=False)
+        self.assertEqual(result, "dry-run")
+        self.assertFalse((self.folder / ".wp-state.json").exists())
+
+    def test_create_draft_and_skip_second_run(self):
+        self.write_html('<div class="chapter19-wide">Hello</div>')
+        fake = FakeWordPress()
+        self.assertEqual(wp_sync.synchronize(self.folder, fake, True), "create")
+        self.assertEqual(fake.requests[0][2]["status"], "draft")
+        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(wp_sync.synchronize(self.folder, fake, True), "skip")
+        self.assertEqual(len(fake.requests), 1)
+
+    def test_modified_source_updates_same_draft(self):
+        self.write_html("<p>first</p>")
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        first_id = next(iter(fake.posts))
+        self.write_html("<p>second</p>")
+        self.assertEqual(wp_sync.synchronize(self.folder, fake, True), "update")
+        self.assertEqual(len(fake.posts), 1)
+        self.assertEqual(next(iter(fake.posts)), first_id)
+        self.assertIn("second", fake.requests[-1][2]["content"])
+
+    def test_base64_and_local_image_uploaded_once_by_hash(self):
+        data = b"\x89PNG\r\n\x1a\n" + b"test-bytes"
+        (self.folder / "images").mkdir()
+        (self.folder / "images" / "scan.png").write_bytes(data)
+        inline = "data:image/png;base64," + base64.b64encode(data).decode()
+        self.write_html(
+            f'<div><img src="images/scan.png"><img src="{inline}"></div>'
+        )
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        self.assertEqual(len(fake.uploads), 1)
+        saved = fake.requests[0][2]["content"]
+        self.assertNotIn("base64,", saved)
+        self.assertNotIn('src="images/scan.png"', saved)
+        self.assertEqual(saved.count("https://example.org/wp-content/uploads/"), 2)
+
+    def test_no_update_to_published_post(self):
+        self.write_html("<p>test</p>")
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        post_id = next(iter(fake.posts))
+        fake.posts[post_id]["status"] = "publish"
+        self.write_html("<p>modified</p>")
+        with self.assertRaisesRegex(wp_sync.SyncError, "임시글이 아닌"):
+            wp_sync.synchronize(self.folder, fake, True)
+        self.assertEqual(len(fake.requests), 1)
+
+    def test_slug_collision_requires_explicit_draft_adoption(self):
+        self.write_html("<p>test</p>")
+        fake = FakeWordPress({
+            "id": 55, "slug": "chapter32-1", "status": "draft",
+        })
+        with self.assertRaisesRegex(wp_sync.SyncError, "동일한 slug"):
+            wp_sync.synchronize(self.folder, fake, True)
+        self.assertEqual(len(fake.requests), 0)
+        self.assertEqual(
+            wp_sync.synchronize(self.folder, fake, True, adopt_draft=True),
+            "update"
+        )
+        self.assertEqual(fake.requests[-1][1], "posts/55")
+
+    def test_adoption_rejects_published_post(self):
+        self.write_html("<p>test</p>")
+        fake = FakeWordPress({
+            "id": 55, "slug": "chapter32-1", "status": "publish",
+        })
+        with self.assertRaises(wp_sync.SyncError):
+            wp_sync.synchronize(self.folder, fake, True, adopt_draft=True)
+
+    def test_parent_path_escape_rejected(self):
+        self.write_html('<img src="../../private.png">')
+        with self.assertRaises(wp_sync.SyncError):
+            wp_sync.prepare(self.folder)
+
+    def test_external_https_image_unchanged(self):
+        self.write_html('<img src="https://example.com/pic.png">')
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        self.assertEqual(fake.uploads, [])
+        self.assertIn(
+            'src="https://example.com/pic.png"',
+            fake.requests[0][2]["content"]
+        )
+
+    def test_http_remote_image_rejected(self):
+        self.write_html('<img src="http://example.com/pic.png">')
+        with self.assertRaises(wp_sync.SyncError):
+            wp_sync.prepare(self.folder)
+
+    def test_full_document_keeps_head_css_and_body(self):
+        self.write_html(
+            '<!doctype html><html><head><style>.chapter19-wide{width:90%}</style>'
+            '</head><body><div class="chapter19-wide"><p>본문</p></div></body></html>'
+        )
+        _, result, _, _ = wp_sync.prepare(self.folder)
+        self.assertIn("<style>", result)
+        self.assertIn("본문", result)
+        self.assertNotIn("<!doctype", result.lower())
+
+    def test_media_cache_survives_post_failure(self):
+        self.write_html(
+            '<img src="data:image/png;base64,' +
+            base64.b64encode(b"\x89PNG\r\n\x1a\nsample").decode() + '">'
+        )
+        fake = FakeWordPress()
+        original_request = fake.request
+
+        def fail_once(method, route, payload=None):
+            raise wp_sync.SyncError("simulated server rejection")
+
+        fake.request = fail_once
+        with self.assertRaises(wp_sync.SyncError):
+            wp_sync.synchronize(self.folder, fake, True)
+        self.assertEqual(len(fake.uploads), 1)
+        self.assertEqual(len(wp_sync.load_state(self.folder)["media"]), 1)
+        fake.request = original_request
+        self.assertEqual(wp_sync.synchronize(self.folder, fake, True), "create")
+        self.assertEqual(len(fake.uploads), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
