@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from wp_check import SameOriginRedirect, load_env, rest_base
+from wp_check import ProbeError, SameOriginRedirect, load_env, rest_base
 
 ROOT = Path(__file__).resolve().parent
 POSTS_DIR = ROOT / "posts"
@@ -363,14 +363,14 @@ def main() -> int:
     failures = 0
     try:
         wp = WordPress(load_env(args.env)) if args.apply else None
-    except (SyncError, ValueError) as exc:
+    except (SyncError, ProbeError, ValueError) as exc:
         print("[FAIL] " + str(exc), file=sys.stderr)
         return 1
     for folder in folders:
         try:
             synchronize(folder, wp, apply=args.apply,
                         adopt_draft=args.adopt_draft, force=args.force)
-        except (SyncError, ValueError, OSError, json.JSONDecodeError) as exc:
+        except (SyncError, ProbeError, ValueError, OSError, json.JSONDecodeError) as exc:
             failures += 1
             print(f"[FAIL] {folder.name}: {exc}", file=sys.stderr)
     return 1 if failures else 0
