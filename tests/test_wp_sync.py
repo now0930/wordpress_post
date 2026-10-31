@@ -5,6 +5,7 @@ import base64
 import json
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 
 import wp_sync
@@ -17,6 +18,7 @@ class FakeWordPress:
             self.posts[initial["id"]] = initial
         self.requests = []
         self.uploads = []
+        self.tags = {1: {"id": 1, "name": "기존 태그"}}
 
     def by_slug(self, slug):
         return [dict(v) for v in self.posts.values() if v["slug"] == slug]
@@ -30,6 +32,18 @@ class FakeWordPress:
 
     def request(self, method, route, payload=None):
         self.requests.append((method, route, payload))
+        if method == "GET" and route.startswith("tags?"):
+            query = urllib.parse.parse_qs(route.partition("?")[2])
+            search = query.get("search", [""])[0].casefold()
+            return [
+                dict(tag) for tag in self.tags.values()
+                if search in tag["name"].casefold()
+            ]
+        if method == "POST" and route == "tags":
+            new_id = max(self.tags, default=0) + 1
+            tag = {"id": new_id, "name": payload["name"]}
+            self.tags[new_id] = tag
+            return dict(tag)
         assert method == "POST"
         if route == "posts":
             post_id = max(self.posts, default=100) + 1
@@ -207,6 +221,79 @@ class FolderTests(unittest.TestCase):
         with self.assertRaisesRegex(wp_sync.SyncError, "추적 중인"):
             wp_sync.synchronize(self.folder, fake, True, recreate_trashed=True)
         self.assertEqual(len(fake.requests), 0)
+
+    def test_keywords_are_uploaded_as_wordpress_tag_ids(self):
+        self.write_html("<p>first</p>")
+        data = json.loads((self.folder / "post.json").read_text(encoding="utf-8"))
+        data["keywords"] = ["기존 태그", "본질안전방폭", "MESG·MICR"]
+        (self.folder / "post.json").write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+        fake = FakeWordPress()
+        result = wp_sync.synchronize(self.folder, fake, True)
+        self.assertEqual(result, "create")
+        self.assertEqual(fake.requests[-1][2]["tags"], [1, 2, 3])
+        self.assertEqual(len(fake.tags), 3)
+        self.assertEqual(
+            wp_sync.synchronize(self.folder, fake, True), "skip"
+        )
+        self.assertEqual(len(fake.tags), 3)
+
+    def test_updating_keywords_changes_existing_draft_no_image_upload(self):
+        self.write_html("<p>first</p>")
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        post_id = next(iter(fake.posts))
+        data = json.loads((self.folder / "post.json").read_text(encoding="utf-8"))
+        data["excerpt"] = "새 요약문"
+        data["keywords"] = ["위험장소 분류", "폭발한계"]
+        (self.folder / "post.json").write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+        self.assertEqual(
+            wp_sync.synchronize(self.folder, fake, True), "update"
+        )
+        self.assertEqual(next(iter(fake.posts)), post_id)
+        self.assertEqual(fake.requests[-1][2]["excerpt"], "새 요약문")
+        self.assertEqual(fake.requests[-1][2]["tags"], [2, 3])
+        self.assertEqual(fake.uploads, [])
+
+    def test_omitted_keywords_do_not_reset_existing_tags(self):
+        self.write_html("<p>first</p>")
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        self.assertNotIn("tags", fake.requests[-1][2])
+
+    def test_empty_keywords_explicitly_clear_tags(self):
+        self.write_html("<p>first</p>")
+        data = json.loads((self.folder / "post.json").read_text(encoding="utf-8"))
+        data["keywords"] = []
+        (self.folder / "post.json").write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        self.assertEqual(fake.requests[-1][2]["tags"], [])
+
+    def test_duplicate_keywords_are_rejected(self):
+        self.write_html("<p>first</p>")
+        data = json.loads((self.folder / "post.json").read_text(encoding="utf-8"))
+        data["keywords"] = ["방폭", " 방폭 "]
+        (self.folder / "post.json").write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+        with self.assertRaisesRegex(wp_sync.SyncError, "중복"):
+            wp_sync.prepare(self.folder)
+
+    def test_keyword_string_instead_of_list_is_rejected(self):
+        self.write_html("<p>first</p>")
+        data = json.loads((self.folder / "post.json").read_text(encoding="utf-8"))
+        data["keywords"] = "방폭, 본질안전"
+        (self.folder / "post.json").write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+        with self.assertRaisesRegex(wp_sync.SyncError, "문자열 배열"):
+            wp_sync.prepare(self.folder)
 
     def test_parent_path_escape_rejected(self):
         self.write_html('<img src="../../private.png">')
