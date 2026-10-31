@@ -94,3 +94,79 @@ wp_check.py는 GET 요청만 수행합니다. 확인 대상은 REST API 색인, 
 - 자동 발행과 삭제 기능은 현재 구현하지 않았습니다.
 - 공개 글이 자동으로 갱신되는 기능은 연결 및 표시 검증 이후 별도 정책으로 도입합니다.
 - 인증 정보는 서버 로컬에만 보관하세요.
+
+
+## 3단계: HTML·그림 임시글 동기화
+
+`wp_sync.py`는 기본적으로 **오프라인 미리보기**만 수행합니다. `--apply`가 없으면 WordPress에 요청하지 않습니다.
+
+### 게시글별 입력 파일
+
+```text
+posts/chapter32-1/
+├── post.json        # 제목 · slug · 요약
+├── post.html        # Chapter 19 형식 학습 본문
+└── images/          # 본문에서 상대경로로 참조하는 이미지
+    └── graph.png
+```
+
+`post.json` 예시:
+
+```json
+{
+  "title": "Chapter 32.1 위험장소와 방폭 보호대책",
+  "slug": "chapter32-1-protective-measures",
+  "excerpt": "위험장소, 폭발한계, 점화에너지, 본질안전 방폭"
+}
+```
+
+`post.html`의 그림은 `<img src="images/graph.png">`처럼 폴더 안의 **상대경로**를 사용할 수 있습니다.
+원본 HTML에 들어 있는 PNG/JPEG/GIF/WebP의 Base64 `data:image/...;base64,...`도 자동으로 미디어 라이브러리에 업로드하고 URL로 교체합니다. 동일한 이미지 파일 내용은 해시로 중복 업로드를 방지합니다.
+원격 HTTPS 그림은 링크를 유지하며 자동으로 다운로드하지 않습니다.
+
+### 미리보기와 실행
+
+먼저 2단계의 실제 인증 진단을 완료합니다.
+
+```bash
+cd ~/wordpress_post
+git pull --ff-only
+
+# 실제 WordPress 인증·게시/미디어 권한 확인 (GET만 수행)
+python3 wp_check.py
+
+# WordPress에 연결하지 않는 미리보기
+python3 wp_sync.py example
+
+# 새로운 예제 게시글을 WordPress 임시글로 실제 등록
+python3 wp_sync.py example --apply
+
+# 모든 게시글 폴더를 미리보기 (실제 게시 안 함)
+python3 wp_sync.py --all
+
+# 모든 폴더의 변경사항을 임시글에 반영
+python3 wp_sync.py --all --apply
+
+# 모든 오프라인 테스트 실행
+python3 -m unittest discover -s tests -v
+```
+
+예제 폴더의 실제 업로드는 **`--apply`를 실행한 경우에만** 일어납니다.
+
+### 중복 방지 및 수정 정책
+
+- 신규 글 생성 시 `status=draft`를 지정합니다.
+- 등록한 WordPress 글 ID와 이미지 URL 캐시는 해당 폴더의 `.wp-state.json`에 저장합니다. 이 파일은 Git에 올리지 않습니다.
+- HTML이나 메타데이터가 바뀌면 **기존 임시글만** 수정합니다.
+- 기존 WordPress 게시글의 slug와 충돌하면 기본적으로 멈춥니다.
+- 다른 PC에서 등록한 **기존 임시글**을 연결하려면 신중히 확인 후 `python3 wp_sync.py example --apply --adopt-draft`를 실행합니다.
+- **발행됨(publish), 예약됨(future), 비공개(private) 등 draft가 아닌 글은 수정하지 않습니다.** 자동 공개발행·삭제 기능도 없습니다.
+- `--force`는 같은 임시글의 내용 재전송에만 사용하며, 공개글 수정 제한을 해제하지 않습니다.
+
+### 현재 검증 범위
+
+- **확인 완료**: 공개 REST API 호출, 최초 8개 진단 코드 오프라인 테스트 (사용자 서버 실행 결과).
+- **GitHub 등록 완료 / 실행 검증 대기**: `wp_sync.py` 및 동기화 오프라인 테스트.
+- **아직 미검증**: 사용자 WordPress Application Password 실제 인증, 미디어 업로드, 임시글 등록, CSS/그림 최종 렌더링.
+
+주의: WordPress가 `<style>`을 제한하는 경우 페이지의 CSS가 제거될 수 있습니다. **본문 구조는 유지하고 Chapter 19 CSS는 WordPress의 추가 CSS 영역에 한 번 등록**하는 방식이 더 안정적입니다.
