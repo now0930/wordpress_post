@@ -138,6 +138,77 @@ class FolderTests(unittest.TestCase):
         with self.assertRaises(wp_sync.SyncError):
             wp_sync.synchronize(self.folder, fake, True, adopt_draft=True)
 
+    def test_trashed_post_has_specific_error_and_is_untouched(self):
+        self.write_html("<p>first</p>")
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        old_id = next(iter(fake.posts))
+        fake.posts[old_id]["status"] = "trash"
+        fake.posts[old_id]["slug"] = "chapter32-1__trashed"
+        before_requests = len(fake.requests)
+        before_state = wp_sync.load_state(self.folder)
+        with self.assertRaisesRegex(wp_sync.SyncError, "휴지통"):
+            wp_sync.synchronize(self.folder, fake, True)
+        self.assertEqual(len(fake.requests), before_requests)
+        self.assertEqual(wp_sync.load_state(self.folder), before_state)
+
+    def test_recreate_trashed_creates_new_draft_and_reuses_images(self):
+        data = b"\\x89PNG\\r\\n\\x1a\\n" + b"test-image"
+        (self.folder / "images").mkdir()
+        (self.folder / "images" / "diagram.png").write_bytes(data)
+        self.write_html('<img src="images/diagram.png">')
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        old_id = next(iter(fake.posts))
+        old_post = dict(fake.posts[old_id])
+        self.assertEqual(len(fake.uploads), 1)
+
+        fake.posts[old_id]["status"] = "trash"
+        fake.posts[old_id]["slug"] = "chapter32-1__trashed"
+        self.assertEqual(
+            wp_sync.synchronize(
+                self.folder, fake, True, recreate_trashed=True
+            ),
+            "create",
+        )
+        state = wp_sync.load_state(self.folder)
+        self.assertNotEqual(state["post_id"], old_id)
+        self.assertEqual(fake.posts[old_id]["status"], "trash")
+        self.assertEqual(fake.posts[old_id]["slug"], "chapter32-1__trashed")
+        self.assertEqual(fake.posts[state["post_id"]]["status"], "draft")
+        self.assertEqual(fake.posts[state["post_id"]]["slug"], "chapter32-1")
+        self.assertEqual(len(fake.uploads), 1)
+        self.assertEqual(
+            wp_sync.synchronize(self.folder, fake, True), "skip"
+        )
+
+    def test_recreate_rejects_active_draft(self):
+        self.write_html("<p>test</p>")
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        with self.assertRaisesRegex(wp_sync.SyncError, "trash"):
+            wp_sync.synchronize(self.folder, fake, True, recreate_trashed=True)
+        self.assertEqual(len(fake.requests), 1)
+
+    def test_recreate_rejects_other_post_with_same_slug(self):
+        self.write_html("<p>test</p>")
+        fake = FakeWordPress()
+        wp_sync.synchronize(self.folder, fake, True)
+        old_id = next(iter(fake.posts))
+        fake.posts[old_id]["status"] = "trash"
+        fake.posts[old_id]["slug"] = "chapter32-1__trashed"
+        fake.posts[77] = {"id": 77, "slug": "chapter32-1", "status": "draft"}
+        with self.assertRaisesRegex(wp_sync.SyncError, "같은 slug"):
+            wp_sync.synchronize(self.folder, fake, True, recreate_trashed=True)
+        self.assertEqual(len(fake.requests), 1)
+
+    def test_recreate_without_tracked_post_is_rejected(self):
+        self.write_html("<p>test</p>")
+        fake = FakeWordPress()
+        with self.assertRaisesRegex(wp_sync.SyncError, "추적 중인"):
+            wp_sync.synchronize(self.folder, fake, True, recreate_trashed=True)
+        self.assertEqual(len(fake.requests), 0)
+
     def test_parent_path_escape_rejected(self):
         self.write_html('<img src="../../private.png">')
         with self.assertRaises(wp_sync.SyncError):
